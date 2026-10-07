@@ -94,5 +94,44 @@ public class SolarInstallationsController : ControllerBase
         return Ok(dto);
     }
 
-    
+        private Task<ReadingDto?> LastReading(int id) =>
+        _db.GenerationReadings.AsNoTracking()
+            .Where(r => r.SolarInstallationId == id)
+            .OrderByDescending(r => r.Timestamp)
+            .Select(ToReadingDto)
+            .FirstOrDefaultAsync();
+
+    [HttpGet("{id:int}/last-reading")]
+    [Authorize(Policy = "readings:read")]
+    public async Task<IActionResult> GetLastReading(int id)
+    {
+        var denied = await CheckAccess(id);
+        if (denied != null) return denied;
+
+        var last = await LastReading(id);
+        if (last is null) return Err.NotFound("Reading");
+        return Ok(last);
+    }
+
+    [HttpGet("{id:int}/overview")]
+    [Authorize(Policy = "readings:read")]
+    public async Task<IActionResult> GetOverview(int id)
+    {
+        var denied = await CheckAccess(id);
+        if (denied != null) return denied;
+
+        var s = await _db.SolarInstallations.AsNoTracking()
+            .Include(x => x.GridSubstation!).ThenInclude(g => g.District!).ThenInclude(d => d.Province!)
+            .FirstAsync(x => x.Id == id);
+
+        var installation = new InstallationDto(s.Id, s.MeterIdentifier, s.OwnerName, s.Address,
+            s.CapacityKw, s.InstalledOn, s.UpdatedAt, s.GridSubstationId);
+        var location = new LocationDto(
+            s.GridSubstation!.District!.Province!.Name,
+            s.GridSubstation.District.Name,
+            s.GridSubstation.Name,
+            s.GridSubstation.Code);
+
+        return Ok(new InstallationOverviewDto(installation, location, await LastReading(id)));
+    }
 }
