@@ -46,4 +46,15 @@ public class JurisdictionService
         if (did.HasValue) return q.Where(s => s.DistrictId == did.Value);
         return q.Where(s => false);
     }
+
+    public IQueryable<SolarInstallation> Installations(ClaimsPrincipal user)
+    {
+        var q = _db.SolarInstallations.AsQueryable();
+        if (user.IsNational()) return q;
+        var pid = user.GetProvinceId();
+        var did = user.GetDistrictId();
+        if (pid.HasValue) return q.Where(s => s.GridSubstation!.District!.ProvinceId == pid.Value);
+        if (did.HasValue) return q.Where(s => s.GridSubstation!.DistrictId == did.Value);
+        return q.Where(s => false);
+    }
 }

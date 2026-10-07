@@ -21,7 +21,11 @@ public class SolarGenerationDbContext : DbContext
     public DbSet<GenerationReading> GenerationReadings => Set<GenerationReading>();
 
     public DbSet<User> Users => Set<User>();
-
+        protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
+    {
+        configurationBuilder.Properties<DateTime>().HaveConversion<UtcDateTimeConverter>();
+    }
+    
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
