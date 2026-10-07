@@ -7,11 +7,10 @@ public static class DbSeeder
 {
     public static void Seed(SolarGenerationDbContext db)
     {
-        if (db.Provinces.Any()) return; // දැනටමත් data තියෙනවා නම් ආයෙත් දාන්නේ නැහැ
+        if (db.Provinces.Any()) return;
 
         var rnd = new Random(42);
 
-        // 1. Provinces සහ Districts (9 + 25)
         var geo = new (string Province, string[] Districts)[]
         {
             ("Western", new[] { "Colombo", "Gampaha", "Kalutara" }),
@@ -34,7 +33,6 @@ public static class DbSeeder
         }
         db.SaveChanges();
 
-        // 2. Grid substations (district එකකට එකක්, ලොකු districts 5කට දෙකක්)
         var bigDistricts = new[] { "Colombo", "Gampaha", "Kandy", "Galle", "Kurunegala" };
         var substations = new List<GridSubstation>();
         int code = 1;
@@ -54,7 +52,6 @@ public static class DbSeeder
         db.GridSubstations.AddRange(substations);
         db.SaveChanges();
 
-        // 3. Users (password: demo විදිහට)
         var western = db.Provinces.First(p => p.Name == "Western");
         var colombo = db.Districts.First(d => d.Name == "Colombo");
         db.Users.AddRange(
@@ -90,7 +87,7 @@ public static class DbSeeder
         db.SolarInstallations.AddRange(installations);
         db.SaveChanges();
 
-        // 5. පසුගිය දවස් 7 ක readings (විනාඩි 30 ට වරක්)
+
         var end = new DateTime(DateTime.UtcNow.Year, DateTime.UtcNow.Month, DateTime.UtcNow.Day,
                                DateTime.UtcNow.Hour, DateTime.UtcNow.Minute < 30 ? 0 : 30, 0, DateTimeKind.Utc);
         var start = end.AddDays(-7);
@@ -103,7 +100,7 @@ public static class DbSeeder
 
             for (var t = start; t <= end; t = t.AddMinutes(30))
             {
-                var local = t.AddHours(5.5); // Sri Lanka වේලාව
+                var local = t.AddHours(5.5);
                 double hour = local.Hour + local.Minute / 60.0;
                 double power = 0;
 
@@ -112,7 +109,7 @@ public static class DbSeeder
                     int dayKey = inst.Id * 1000 + (int)(t - start).TotalDays;
                     if (!dayCloud.TryGetValue(dayKey, out var cloud))
                     {
-                        cloud = 0.5 + rnd.NextDouble() * 0.5; // දවසේ වලාකුළු බලපෑම
+                        cloud = 0.5 + rnd.NextDouble() * 0.5;
                         dayCloud[dayKey] = cloud;
                     }
                     power = Math.Sin(Math.PI * (hour - 6) / 12) * inst.CapacityKw * cloud
@@ -120,7 +117,7 @@ public static class DbSeeder
                     power = Math.Round(Math.Max(power, 0), 3);
                 }
 
-                energy += power * 0.5; // kW x පැය 0.5
+                energy += power * 0.5;
                 readings.Add(new GenerationReading
                 {
                     SolarInstallationId = inst.Id,
