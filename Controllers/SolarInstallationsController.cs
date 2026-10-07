@@ -134,4 +134,47 @@ public class SolarInstallationsController : ControllerBase
 
         return Ok(new InstallationOverviewDto(installation, location, await LastReading(id)));
     }
+
+        [HttpGet("{id:int}/readings")]
+    [Authorize(Policy = "readings:read")]
+    public async Task<IActionResult> GetReadings(int id,
+        [FromQuery(Name = "from")] DateTimeOffset? fromTime,
+        [FromQuery(Name = "to")] DateTimeOffset? toTime,
+        string? sort,
+        int page = 1,
+        [FromQuery(Name = "page_size")] int pageSize = 20)
+    {
+        var denied = await CheckAccess(id);
+        if (denied != null) return denied;
+
+        var invalid = ValidatePaging(page, pageSize);
+        if (invalid != null) return invalid;
+
+        if (fromTime.HasValue && toTime.HasValue && fromTime > toTime)
+            return Err.Make(400, "VALIDATION_ERROR", "'from' must not be later than 'to'.");
+        if (sort != null && sort != "timestamp" && sort != "-timestamp")
+            return Err.Make(400, "VALIDATION_ERROR", "sort must be timestamp or -timestamp.");
+
+        var q = _db.GenerationReadings.AsNoTracking().Where(r => r.SolarInstallationId == id);
+        if (fromTime.HasValue)
+        {
+            var f = fromTime.Value.UtcDateTime;
+            q = q.Where(r => r.Timestamp >= f);
+        }
+        if (toTime.HasValue)
+        {
+            var t = toTime.Value.UtcDateTime;
+            q = q.Where(r => r.Timestamp <= t);
+        }
+
+        var total = await q.CountAsync();
+        var ordered = sort == "timestamp"
+            ? q.OrderBy(r => r.Timestamp)
+            : q.OrderByDescending(r => r.Timestamp); 
+
+        var items = await ordered.Skip((page - 1) * pageSize).Take(pageSize).Select(ToReadingDto).ToListAsync();
+
+        return Ok(new PagedResponse<ReadingDto>(total, page, pageSize, items,
+            PagingLinks.Build(Request, page, pageSize, total)));
+    }
 }
