@@ -177,4 +177,67 @@ public class SolarInstallationsController : ControllerBase
         return Ok(new PagedResponse<ReadingDto>(total, page, pageSize, items,
             PagingLinks.Build(Request, page, pageSize, total)));
     }
+
+        [HttpGet("{id:int}/readings/{readingId:long}")]
+    [Authorize(Policy = "readings:read")]
+    public async Task<IActionResult> GetReading(int id, long readingId)
+    {
+        var denied = await CheckAccess(id);
+        if (denied != null) return denied;
+
+        var dto = await _db.GenerationReadings.AsNoTracking()
+            .Where(r => r.Id == readingId && r.SolarInstallationId == id)
+            .Select(ToReadingDto)
+            .FirstOrDefaultAsync();
+        if (dto is null) return Err.NotFound("Reading");
+        return Ok(dto);
+    }
+
+    [HttpPost("{id:int}/readings")]
+    [Authorize(Policy = "installation:write")]
+    public async Task<IActionResult> CreateReading(int id, [FromBody] CreateReadingRequest request)
+    {
+        //device token is only for their own installation
+        var claim = User.FindFirst("installation_id")?.Value;
+        if (claim != id.ToString())
+            return Err.Make(403, "NOT_YOUR_INSTALLATION",
+                "This token may only submit readings for its own installation.");
+
+        var installation = await _db.SolarInstallations.AsNoTracking().FirstOrDefaultAsync(s => s.Id == id);
+        if (installation is null) return Err.NotFound("Solar installation");
+
+        var timestamp = request.Timestamp!.Value.UtcDateTime;
+        if (timestamp > DateTime.UtcNow.AddMinutes(5))
+            return Err.Make(400, "VALIDATION_ERROR", "timestamp must not be in the future.");
+        if (request.InstantaneousPowerKw!.Value > installation.CapacityKw * 1.25)
+            return Err.Make(400, "VALIDATION_ERROR", "instantaneousPowerKw exceeds the installation's capacity.");
+
+        if (await _db.GenerationReadings.AnyAsync(r => r.SolarInstallationId == id && r.Timestamp == timestamp))
+            return Err.Make(409, "DUPLICATE_READING",
+                "A reading for this installation and timestamp already exists.");
+
+        var reading = new GenerationReading
+        {
+            SolarInstallationId = id,
+            Timestamp = timestamp,
+            InstantaneousPowerKw = request.InstantaneousPowerKw!.Value,
+            CumulativeEnergyKwh = request.CumulativeEnergyKwh!.Value,
+            Voltage = request.Voltage!.Value
+        };
+        _db.GenerationReadings.Add(reading);
+
+        try
+        {
+            await _db.SaveChangesAsync();
+        }
+        catch (DbUpdateException)
+        {
+            return Err.Make(409, "DUPLICATE_READING",
+                "A reading for this installation and timestamp already exists.");
+        }
+
+        return CreatedAtAction(nameof(GetReading), new { id, readingId = reading.Id },
+            new ReadingDto(reading.Id, reading.SolarInstallationId, reading.Timestamp,
+                reading.InstantaneousPowerKw, reading.CumulativeEnergyKwh, reading.Voltage));
+    }
 }
