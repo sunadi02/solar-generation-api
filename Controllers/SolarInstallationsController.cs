@@ -26,6 +26,8 @@ public class SolarInstallationsController : ControllerBase
     private static readonly Expression<Func<SolarInstallation, InstallationDto>> ToDto = s =>
         new InstallationDto(s.Id, s.MeterIdentifier, s.OwnerName, s.Address, s.CapacityKw,
             s.InstalledOn, s.UpdatedAt, s.GridSubstationId);
+    
+    private static readonly Func<SolarInstallation, InstallationDto> Map = ToDto.Compile();
 
     private static readonly Expression<Func<GenerationReading, ReadingDto>> ToReadingDto = r =>
         new ReadingDto(r.Id, r.SolarInstallationId, r.Timestamp, r.InstantaneousPowerKw,
@@ -239,5 +241,94 @@ public class SolarInstallationsController : ControllerBase
         return CreatedAtAction(nameof(GetReading), new { id, readingId = reading.Id },
             new ReadingDto(reading.Id, reading.SolarInstallationId, reading.Timestamp,
                 reading.InstantaneousPowerKw, reading.CumulativeEnergyKwh, reading.Voltage));
+    }
+
+    [HttpPost]
+    [Authorize(Policy = "admin:write")]
+    public async Task<IActionResult> Create([FromBody] CreateInstallationRequest request)
+    {
+        if (!await _db.GridSubstations.AnyAsync(g => g.Id == request.GridSubstationId))
+            return Err.Make(400, "VALIDATION_ERROR", "Grid substation does not exist.",
+                new { gridSubstationId = request.GridSubstationId });
+        if (await _db.SolarInstallations.AnyAsync(s => s.MeterIdentifier == request.MeterIdentifier))
+            return Err.Make(409, "DUPLICATE_METER", "An installation with this meter identifier already exists.");
+
+        var entity = new SolarInstallation
+        {
+            MeterIdentifier = request.MeterIdentifier,
+            OwnerName = request.OwnerName,
+            Address = request.Address,
+            CapacityKw = request.CapacityKw!.Value,
+            InstalledOn = request.InstalledOn!.Value,
+            GridSubstationId = request.GridSubstationId!.Value,
+            DeviceSecretHash = BCrypt.Net.BCrypt.HashPassword(request.DeviceSecret),
+            UpdatedAt = DateTime.UtcNow
+        };
+        _db.SolarInstallations.Add(entity);
+        await _db.SaveChangesAsync();
+
+        return CreatedAtAction(nameof(Get), new { id = entity.Id }, Map(entity));
+    }
+
+    [HttpPut("{id:int}")]
+    [Authorize(Policy = "admin:write")]
+    public async Task<IActionResult> Replace(int id, [FromBody] ReplaceInstallationRequest request)
+    {
+        var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
+        if (entity is null) return Err.NotFound("Solar installation");
+
+        if (!await _db.GridSubstations.AnyAsync(g => g.Id == request.GridSubstationId))
+            return Err.Make(400, "VALIDATION_ERROR", "Grid substation does not exist.");
+        if (await _db.SolarInstallations.AnyAsync(s => s.Id != id && s.MeterIdentifier == request.MeterIdentifier))
+            return Err.Make(409, "DUPLICATE_METER", "Another installation already uses this meter identifier.");
+
+        entity.MeterIdentifier = request.MeterIdentifier;
+        entity.OwnerName = request.OwnerName;
+        entity.Address = request.Address;
+        entity.CapacityKw = request.CapacityKw!.Value;
+        entity.InstalledOn = request.InstalledOn!.Value;
+        entity.GridSubstationId = request.GridSubstationId!.Value;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return Ok(Map(entity));
+    }
+
+    [HttpPatch("{id:int}")]
+    [Authorize(Policy = "admin:write")]
+    public async Task<IActionResult> Patch(int id, [FromBody] PatchInstallationRequest request)
+    {
+        var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
+        if (entity is null) return Err.NotFound("Solar installation");
+
+        if (request.GridSubstationId.HasValue &&
+            !await _db.GridSubstations.AnyAsync(g => g.Id == request.GridSubstationId.Value))
+            return Err.Make(400, "VALIDATION_ERROR", "Grid substation does not exist.");
+        if (request.MeterIdentifier != null &&
+            await _db.SolarInstallations.AnyAsync(s => s.Id != id && s.MeterIdentifier == request.MeterIdentifier))
+            return Err.Make(409, "DUPLICATE_METER", "Another installation already uses this meter identifier.");
+
+        if (request.MeterIdentifier != null) entity.MeterIdentifier = request.MeterIdentifier;
+        if (request.OwnerName != null) entity.OwnerName = request.OwnerName;
+        if (request.Address != null) entity.Address = request.Address;
+        if (request.CapacityKw.HasValue) entity.CapacityKw = request.CapacityKw.Value;
+        if (request.InstalledOn.HasValue) entity.InstalledOn = request.InstalledOn.Value;
+        if (request.GridSubstationId.HasValue) entity.GridSubstationId = request.GridSubstationId.Value;
+        entity.UpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync();
+
+        return Ok(Map(entity));
+    }
+
+    [HttpDelete("{id:int}")]
+    [Authorize(Policy = "admin:write")]
+    public async Task<IActionResult> Delete(int id)
+    {
+        var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
+        if (entity is null) return Err.NotFound("Solar installation");
+
+        _db.SolarInstallations.Remove(entity); 
+        await _db.SaveChangesAsync();
+        return NoContent();
     }
 }
