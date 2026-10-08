@@ -93,6 +93,15 @@ public class SolarInstallationsController : ControllerBase
 
         var dto = await _db.SolarInstallations.AsNoTracking()
             .Where(s => s.Id == id).Select(ToDto).FirstAsync();
+
+        var etag = ETagFor(dto.UpdatedAt);
+        Response.Headers.ETag = etag;
+        Response.Headers.LastModified = dto.UpdatedAt.ToUniversalTime().ToString("R");
+
+        var notModified = Request.Headers.IfNoneMatch
+            .Any(v => v!.Split(',').Select(x => x.Trim()).Any(x => x == "*" || x == etag || x == "W/" + etag));
+        if (notModified) return StatusCode(304);
+
         return Ok(dto);
     }
 
@@ -180,7 +189,7 @@ public class SolarInstallationsController : ControllerBase
             PagingLinks.Build(Request, page, pageSize, total)));
     }
 
-        [HttpGet("{id:int}/readings/{readingId:long}")]
+    [HttpGet("{id:int}/readings/{readingId:long}")]
     [Authorize(Policy = "readings:read")]
     public async Task<IActionResult> GetReading(int id, long readingId)
     {
@@ -277,6 +286,9 @@ public class SolarInstallationsController : ControllerBase
         var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
         if (entity is null) return Err.NotFound("Solar installation");
 
+        var precondition = CheckIfMatch(entity);
+        if (precondition != null) return precondition;
+
         if (!await _db.GridSubstations.AnyAsync(g => g.Id == request.GridSubstationId))
             return Err.Make(400, "VALIDATION_ERROR", "Grid substation does not exist.");
         if (await _db.SolarInstallations.AnyAsync(s => s.Id != id && s.MeterIdentifier == request.MeterIdentifier))
@@ -291,6 +303,7 @@ public class SolarInstallationsController : ControllerBase
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
+        Response.Headers.ETag = ETagFor(entity.UpdatedAt);
         return Ok(Map(entity));
     }
 
@@ -300,6 +313,9 @@ public class SolarInstallationsController : ControllerBase
     {
         var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
         if (entity is null) return Err.NotFound("Solar installation");
+
+        var precondition = CheckIfMatch(entity);
+        if (precondition != null) return precondition;
 
         if (request.GridSubstationId.HasValue &&
             !await _db.GridSubstations.AnyAsync(g => g.Id == request.GridSubstationId.Value))
@@ -317,6 +333,7 @@ public class SolarInstallationsController : ControllerBase
         entity.UpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync();
 
+        Response.Headers.ETag = ETagFor(entity.UpdatedAt);
         return Ok(Map(entity));
     }
 
@@ -327,8 +344,26 @@ public class SolarInstallationsController : ControllerBase
         var entity = await _db.SolarInstallations.FirstOrDefaultAsync(s => s.Id == id);
         if (entity is null) return Err.NotFound("Solar installation");
 
+        var precondition = CheckIfMatch(entity);
+        if (precondition != null) return precondition;
+
         _db.SolarInstallations.Remove(entity); 
         await _db.SaveChangesAsync();
         return NoContent();
+    }
+
+    private static string ETagFor(DateTime updatedAt) => $"\"{updatedAt.Ticks:x}\"";
+
+    private IActionResult? CheckIfMatch(SolarInstallation current)
+    {
+        if (!Request.Headers.TryGetValue("If-Match", out var header) || header.Count == 0)
+            return Err.Make(428, "PRECONDITION_REQUIRED", "Send an If-Match header with the current ETag.");
+
+        var etag = ETagFor(current.UpdatedAt);
+        var ok = header.ToString().Split(',').Select(x => x.Trim()).Any(x => x == "*" || x == etag);
+        if (!ok)
+            return Err.Make(412, "PRECONDITION_FAILED",
+                "The resource has changed. Fetch it again and retry with the new ETag.");
+        return null;
     }
 }
